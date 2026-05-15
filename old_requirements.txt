@@ -1,0 +1,7 @@
+pymongo
+pandas
+python-dotenv
+certifi
+streamlit
+streamlit-option_menu
+plotly
