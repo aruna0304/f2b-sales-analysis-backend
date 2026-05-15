@@ -14,3 +14,4 @@ build/
 
 # Large data files — generate locally by running pipeline.py
 *.csv
+node_modules/
