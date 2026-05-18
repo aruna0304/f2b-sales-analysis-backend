@@ -303,8 +303,8 @@ def get_profit_analysis(db: Database):
 
 def get_monthly_vendor_trends(db: Database):
     """
-    Monthly time-series of purchase cost and quantity per vendor.
-    purchaseDate is stored as string 'YYYY-MM-DD' → extract year/month.
+    Monthly time-series of purchase cost, quantity, GST, estimated revenue,
+    estimated profit, and products list per vendor.
     """
     pipeline = [
         {"$match": {
@@ -313,12 +313,50 @@ def get_monthly_vendor_trends(db: Database):
             "isDeleted": {"$ne": True}
         }},
 
-        # Unwind products to get per-product monthly data
+        # Flatten productDetails array
         {"$unwind": {"path": "$productDetails", "preserveNullAndEmptyArrays": False}},
         {"$match": {"productDetails.isDeleted": {"$ne": True}}},
 
+        # Join the latest castingscreen on productId to get profit percentage
+        {"$lookup": {
+            "from": COL_CASTINGSCREENS,
+            "let": {"lineProductId": "$productDetails.productId"},
+            "pipeline": [
+                {"$match": {
+                    "$expr": {"$eq": [f"${CS_PRODUCT_ID}", "$$lineProductId"]},
+                    "isDeleted": {"$ne": True}
+                }},
+                {"$sort": {CS_CREATED_ON: -1}},
+                {"$limit": 1}
+            ],
+            "as": "casting"
+        }},
+        {"$unwind": {"path": "$casting", "preserveNullAndEmptyArrays": True}},
+
+        # Add line-level GST, estimated profit, and estimated revenue
+        {"$addFields": {
+            "purchaseCost":     {"$ifNull": [f"${PD_PURCHASE_COST}", 0]},
+            "profitPct":        {"$ifNull": [f"$casting.{CS_PROFIT_PCT}", 0]},
+            "lineGST": {
+                "$multiply": [
+                    {"$ifNull": [f"${PD_PURCHASE_COST}", 0]},
+                    {"$divide": [{"$ifNull": [f"${PD_GST_VALUE}", 0]}, 100]}
+                ]
+            }
+        }},
+        {"$addFields": {
+            "lineProfit": {
+                "$multiply": [
+                    "$purchaseCost",
+                    {"$divide": ["$profitPct", 100]}
+                ]
+            }
+        }},
+        {"$addFields": {
+            "lineRevenue": {"$add": ["$purchaseCost", "$lineProfit"]}
+        }},
+
         # Parse date string to extract year/month
-        # purchaseDate is "YYYY-MM-DD" string
         {"$addFields": {
             "parsedDate": {
                 "$dateFromString": {
@@ -344,16 +382,12 @@ def get_monthly_vendor_trends(db: Database):
                 "monthStr": "$monthStr"
             },
             "totalQuantity":    {"$sum": {"$ifNull": [f"${PD_BASE_UNIT_QUANTITY}", 0]}},
-            "totalPurchaseAmt": {"$sum": {"$ifNull": [f"${PD_PURCHASE_COST}", 0]}},
-            "totalGST": {
-                "$sum": {
-                    "$multiply": [
-                        {"$ifNull": [f"${PD_PURCHASE_COST}", 0]},
-                        {"$divide": [{"$ifNull": [f"${PD_GST_VALUE}", 0]}, 100]}
-                    ]
-                }
-            },
+            "totalPurchaseAmt": {"$sum": "$purchaseCost"},
+            "totalGST":         {"$sum": "$lineGST"},
+            "estimatedProfit":  {"$sum": "$lineProfit"},
+            "totalRevenue":     {"$sum": "$lineRevenue"},
             "transactionCount": {"$sum": 1},
+            "products":         {"$addToSet": f"${PD_PRODUCT_NAME}"}
         }},
 
         # Join vendor name
@@ -375,7 +409,10 @@ def get_monthly_vendor_trends(db: Database):
             "totalQuantity":    1,
             "totalPurchaseAmt": 1,
             "totalGST":         1,
+            "estimatedProfit":  1,
+            "totalRevenue":     1,
             "transactionCount": 1,
+            "products":         1,
         }},
         {"$sort": {"year": 1, "month": 1}}
     ]
