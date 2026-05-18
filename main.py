@@ -3,6 +3,8 @@ import logging
 import pandas as pd
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from typing import List, Dict, Any
 
 # Import local modules
@@ -97,6 +99,25 @@ def get_vendor_products(vendor_id: str):
     except Exception as e:
         logger.error(f"Error fetching product breakdown for {vendor_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+# ── Serve Frontend Static Files ──────────────────────────────────────────────
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+dist_path = os.path.join(BASE_DIR, "dist")
+dist_assets_path = os.path.join(dist_path, "assets")
+dist_index_path = os.path.join(dist_path, "index.html")
+
+if os.path.exists(dist_path):
+    app.mount("/assets", StaticFiles(directory=dist_assets_path), name="assets")
+
+    @app.get("/")
+    def read_root():
+        return FileResponse(dist_index_path)
+
+    @app.get("/{catchall:path}")
+    def read_index(catchall: str):
+        # Do not capture API routes to avoid returning HTML for bad API calls
+        if catchall.startswith(("data/", "vendors/", "health")):
+            raise HTTPException(status_code=404, detail="Not Found")
+        return FileResponse(dist_index_path)
 
 if __name__ == "__main__":
     import uvicorn
