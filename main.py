@@ -15,6 +15,7 @@ from vendor_analysis.queries import (
     get_monthly_vendor_trends,
     get_vendor_product_breakdown
 )
+from processing.live_pipeline import get_live_demand_intelligence, get_live_historical_sales
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -36,24 +37,22 @@ app.add_middleware(
 def health_check():
     return {"status": "online", "message": "F2B Sales Analytics API is running"}
 
-# ── Data Endpoints (CSV based) ────────────────────────────────────────────────
+# ── Data Endpoints (Live MongoDB based, March 2026 to Present) ────────────────
 @app.get("/data/demand")
 def get_demand_data():
     try:
-        df = pd.read_csv("latest_demand_intelligence.csv")
-        return df.fillna(0).to_dict(orient="records")
+        return get_live_demand_intelligence()
     except Exception as e:
-        logger.error(f"Error reading demand data: {e}")
-        raise HTTPException(status_code=404, detail="Demand data not found")
+        logger.error(f"Error generating live demand data: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/data/historical")
 def get_historical_sales():
     try:
-        df = pd.read_csv("historical_sales.csv")
-        return df.fillna(0).to_dict(orient="records")
+        return get_live_historical_sales()
     except Exception as e:
-        logger.error(f"Error reading historical sales: {e}")
-        raise HTTPException(status_code=404, detail="Historical sales data not found")
+        logger.error(f"Error generating live historical sales: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 # ── Vendor Analysis Endpoints (MongoDB based) ─────────────────────────────────
 @app.get("/vendors/summary")

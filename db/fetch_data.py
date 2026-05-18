@@ -3,7 +3,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-def fetch_order_data():
+def fetch_order_data(start_date=None):
     """
     Fetches raw order data from the 'orderdetails' and 'retaildetails' collections.
     Strictly performs read-only operations.
@@ -23,17 +23,28 @@ def fetch_order_data():
             }
         },
         {"$unwind": "$order_info"},
-        {
-            "$project": {
-                "_id": 0,
-                "productId": "$farmProductId",
-                "quantity": 1,
-                "subUnits": 1,
-                "unit": "$unitValue",
-                "date": {"$ifNull": ["$order_info.createdOn", "$createdAt"]}
-            }
-        }
     ]
+    
+    if start_date is not None:
+        pipeline_online.append({
+            "$match": {
+                "$or": [
+                    {"order_info.createdOn": {"$gte": start_date}},
+                    {"createdAt": {"$gte": start_date}}
+                ]
+            }
+        })
+        
+    pipeline_online.append({
+        "$project": {
+            "_id": 0,
+            "productId": "$farmProductId",
+            "quantity": 1,
+            "subUnits": 1,
+            "unit": "$unitValue",
+            "date": {"$ifNull": ["$order_info.createdOn", "$createdAt"]}
+        }
+    })
     
     logger.info("Fetching data from 'orderdetails' collection...")
     orderdetails_data = list(db.orderdetails.aggregate(pipeline_online))
@@ -49,8 +60,12 @@ def fetch_order_data():
         "date": "$createdOn"
     }
     
+    filter_offline = {}
+    if start_date is not None:
+        filter_offline["createdOn"] = {"$gte": start_date}
+    
     logger.info("Fetching data from 'retaildetails' collection...")
-    retaildetails_data = list(db.retaildetails.find({}, projection_offline))
+    retaildetails_data = list(db.retaildetails.find(filter_offline, projection_offline))
     logger.info(f"Fetched {len(retaildetails_data)} records from offline orders.")
     
     return orderdetails_data, retaildetails_data
