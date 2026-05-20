@@ -1,5 +1,6 @@
 import os
 import logging
+import time
 import pandas as pd
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,6 +22,28 @@ from processing.live_pipeline import get_live_demand_intelligence, get_live_hist
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
+# ── TTL Memory Cache Utility ──────────────────────────────────────────────────
+class TTLMemoryCache:
+    def __init__(self, ttl_seconds=300):
+        self.ttl = ttl_seconds
+        self.store = {}
+
+    def get(self, key):
+        if key in self.store:
+            val, expiry = self.store[key]
+            if time.time() < expiry:
+                return val
+            del self.store[key]
+        return None
+
+    def set(self, key, val):
+        self.store[key] = (val, time.time() + self.ttl)
+
+    def clear(self):
+        self.store.clear()
+
+global_cache = TTLMemoryCache(ttl_seconds=300) # 5 minutes TTL
+
 app = FastAPI(title="F2B Sales Analytics API")
 
 # Enable CORS for frontend
@@ -37,11 +60,27 @@ app.add_middleware(
 def health_check():
     return {"status": "online", "message": "F2B Sales Analytics API is running"}
 
+# ── Cache Management Endpoint ────────────────────────────────────────────────
+@app.post("/cache/clear")
+@app.get("/cache/clear")
+def clear_cache():
+    global_cache.clear()
+    logger.info("Cleared backend memory cache.")
+    return {"status": "success", "message": "Backend cache cleared successfully"}
+
 # ── Data Endpoints (Live MongoDB based, March 2026 to Present) ────────────────
 @app.get("/data/demand")
 def get_demand_data():
     try:
-        return get_live_demand_intelligence()
+        cache_key = "demand"
+        cached = global_cache.get(cache_key)
+        if cached is not None:
+            logger.info("Cache hit: demand data")
+            return cached
+
+        data = get_live_demand_intelligence()
+        global_cache.set(cache_key, data)
+        return data
     except Exception as e:
         logger.error(f"Error generating live demand data: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -49,7 +88,15 @@ def get_demand_data():
 @app.get("/data/historical")
 def get_historical_sales():
     try:
-        return get_live_historical_sales()
+        cache_key = "historical"
+        cached = global_cache.get(cache_key)
+        if cached is not None:
+            logger.info("Cache hit: historical sales data")
+            return cached
+
+        data = get_live_historical_sales()
+        global_cache.set(cache_key, data)
+        return data
     except Exception as e:
         logger.error(f"Error generating live historical sales: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -58,10 +105,18 @@ def get_historical_sales():
 @app.get("/vendors/summary")
 def get_vendors_summary():
     try:
+        cache_key = "vendors_summary"
+        cached = global_cache.get(cache_key)
+        if cached is not None:
+            logger.info("Cache hit: vendors summary")
+            return cached
+
         db = get_database()
         records = get_vendor_purchase_summary(db)
         df = pd.DataFrame(records).fillna(0)
-        return df.to_dict(orient="records")
+        data = df.to_dict(orient="records")
+        global_cache.set(cache_key, data)
+        return data
     except Exception as e:
         logger.error(f"Error fetching vendor summary: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -69,10 +124,18 @@ def get_vendors_summary():
 @app.get("/vendors/profit")
 def get_vendors_profit():
     try:
+        cache_key = "vendors_profit"
+        cached = global_cache.get(cache_key)
+        if cached is not None:
+            logger.info("Cache hit: vendors profit analysis")
+            return cached
+
         db = get_database()
         records = get_profit_analysis(db)
         df = pd.DataFrame(records).fillna(0)
-        return df.to_dict(orient="records")
+        data = df.to_dict(orient="records")
+        global_cache.set(cache_key, data)
+        return data
     except Exception as e:
         logger.error(f"Error fetching profit analysis: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -80,10 +143,18 @@ def get_vendors_profit():
 @app.get("/vendors/trends")
 def get_vendors_trends():
     try:
+        cache_key = "vendors_trends"
+        cached = global_cache.get(cache_key)
+        if cached is not None:
+            logger.info("Cache hit: vendors trends")
+            return cached
+
         db = get_database()
         records = get_monthly_vendor_trends(db)
         df = pd.DataFrame(records).fillna(0)
-        return df.to_dict(orient="records")
+        data = df.to_dict(orient="records")
+        global_cache.set(cache_key, data)
+        return data
     except Exception as e:
         logger.error(f"Error fetching vendor trends: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -91,10 +162,18 @@ def get_vendors_trends():
 @app.get("/vendors/{vendor_id}/products")
 def get_vendor_products(vendor_id: str):
     try:
+        cache_key = f"vendor_products_{vendor_id}"
+        cached = global_cache.get(cache_key)
+        if cached is not None:
+            logger.info(f"Cache hit: product breakdown for vendor {vendor_id}")
+            return cached
+
         db = get_database()
         records = get_vendor_product_breakdown(db, vendor_id)
         df = pd.DataFrame(records).fillna(0)
-        return df.to_dict(orient="records")
+        data = df.to_dict(orient="records")
+        global_cache.set(cache_key, data)
+        return data
     except Exception as e:
         logger.error(f"Error fetching product breakdown for {vendor_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))

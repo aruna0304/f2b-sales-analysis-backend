@@ -13,7 +13,28 @@ def fetch_order_data(start_date=None):
     
     # 1. Fetch Online Orders (orderdetails)
     # Note: We join with 'orders' to get the creation date
-    pipeline_online = [
+    # Optimization: Pre-filter orderdetails using indexes before performing any heavy $lookup join.
+    pipeline_online = []
+    
+    if start_date is not None:
+        # Fetch relevant order IDs first (highly efficient using orders.createdOn index)
+        relevant_orders = list(db.orders.find(
+            {"createdOn": {"$gte": start_date}},
+            {"_id": 1}
+        ))
+        order_ids = [order["_id"] for order in relevant_orders]
+        
+        # Match orderdetails directly by orderId index or createdAt index first!
+        pipeline_online.append({
+            "$match": {
+                "$or": [
+                    {"orderId": {"$in": order_ids}},
+                    {"createdAt": {"$gte": start_date}}
+                ]
+            }
+        })
+        
+    pipeline_online.extend([
         {
             "$lookup": {
                 "from": "orders",
@@ -23,8 +44,9 @@ def fetch_order_data(start_date=None):
             }
         },
         {"$unwind": "$order_info"},
-    ]
+    ])
     
+    # Secondary check on joined info to guarantee exact correctness
     if start_date is not None:
         pipeline_online.append({
             "$match": {
