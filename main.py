@@ -101,6 +101,104 @@ def get_historical_sales():
         logger.error(f"Error generating live historical sales: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+# ── Wastage Analysis Endpoint ──────────────────────────────────────────────────
+@app.get("/data/wastage")
+def get_wastage_data():
+    try:
+        cache_key = "wastage_data"
+        cached = global_cache.get(cache_key)
+        if cached is not None:
+            logger.info("Cache hit: wastage data")
+            return cached
+
+        db = get_database()
+        pipeline = [
+            {"$match": {
+                "sectionType": "wastage",
+                "isDeleted": {"$ne": True}
+            }},
+            {"$addFields": {
+                "prodIdObj": {
+                    "$cond": [
+                        {"$and": [
+                            {"$ne": [{"$ifNull": ["$productId", ""]}, ""]},
+                            {"$eq": [{"$type": "$productId"}, "string"]}
+                        ]},
+                        {"$toObjectId": "$productId"},
+                        {"$cond": [
+                            {"$and": [
+                                {"$ne": [{"$ifNull": ["$farmProductId", ""]}, ""]},
+                                {"$eq": [{"$type": "$farmProductId"}, "string"]}
+                            ]},
+                            {"$toObjectId": "$farmProductId"},
+                            None
+                        ]}
+                    ]
+                }
+            }},
+            {"$lookup": {
+                "from": "farmproducts",
+                "localField": "prodIdObj",
+                "foreignField": "_id",
+                "as": "farmProductInfo"
+            }},
+            {"$unwind": {"path": "$farmProductInfo", "preserveNullAndEmptyArrays": True}},
+            {"$lookup": {
+                "from": "farmers",
+                "localField": "farmProductInfo.farmerId",
+                "foreignField": "_id",
+                "as": "farmerInfo"
+            }},
+            {"$unwind": {"path": "$farmerInfo", "preserveNullAndEmptyArrays": True}},
+            {"$project": {
+                "_id": 0,
+                "id": {"$toString": "$_id"},
+                "code": {"$toString": "$_id"},
+                "date": {
+                    "$cond": [
+                        {"$eq": [{"$type": "$date"}, "date"]},
+                        {"$dateToString": {"format": "%Y-%m-%d", "date": "$date"}},
+                        {"$dateToString": {"format": "%Y-%m-%d", "date": "$createdAt"}}
+                    ]
+                },
+                "product": "$productName",
+                "type": {
+                    "$cond": [
+                        {"$eq": [{"$ifNull": ["$wastageReason", ""]}, ""]},
+                        "Unknown",
+                        "$wastageReason"
+                    ]
+                },
+                "quantityLost": "$quantity",
+                "loss": "$totalPrice",
+                "source": {"$cond": [{"$eq": ["$createdBy", "admin"]}, "Manual", "Auto"]},
+                "notes": "$wastageReason",
+                "vendorName": {"$cond": [
+                    {"$gt": [{"$ifNull": ["$farmerInfo.farmerName", ""]}, ""]},
+                    "$farmerInfo.farmerName",
+                    "Other Vendor"
+                ]},
+                "vendorId": {"$cond": [
+                    {"$gt": [{"$ifNull": ["$farmerInfo._id", ""]}, ""]},
+                    {"$toString": "$farmerInfo._id"},
+                    "other"
+                ]}
+            }},
+            {"$sort": {"date": -1}}
+        ]
+        
+        records = list(db.dailystockentries.aggregate(pipeline))
+        # Ensure type is capitalized for UI consistency
+        for r in records:
+            if r.get("type"):
+                r["type"] = str(r["type"]).capitalize()
+
+        global_cache.set(cache_key, records)
+        return records
+    except Exception as e:
+        logger.error(f"Error fetching wastage data: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 # ── Vendor Analysis Endpoints (MongoDB based) ─────────────────────────────────
 @app.get("/vendors/summary")
 def get_vendors_summary():
